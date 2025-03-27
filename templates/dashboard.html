@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tracking Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+        .card { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; }
+        .monospace { font-family: monospace; }
+        .ip-note { color: #666; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Tracking Dashboard</h1>
+
+        <div class="stats-grid">
+            <div class="card">
+                <h3>Total Visits</h3>
+                <p class="big-number">{{ total_visits }}</p>
+            </div>
+            <div class="card">
+                <h3>Unique Users</h3>
+                <p class="big-number">{{ unique_users }}</p>
+            </div>
+            <div class="card">
+                <h3>Local IP</h3>
+                <p class="monospace">{{ local_ip }}</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Top Locations</h2>
+            <table>
+                <tr>
+                    <th>Country</th>
+                    <th>City</th>
+                    <th>Visits</th>
+                </tr>
+                {% for loc in top_locations %}
+                <tr>
+                    <td>{{ loc.country }}</td>
+                    <td>{{ loc.city }}</td>
+                    <td>{{ loc.count }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+
+        <div class="card">
+            <h2>Recent Visits (Last 20)</h2>
+            <table>
+                <tr>
+                    <th>Time</th>
+                    <th>User ID</th>
+                    <th>Location</th>
+                    <th>IP Address</th>
+                    <th>Visits</th>
+                    <th>First Seen</th>
+                </tr>
+                {% for visit in recent_visits %}
+                <tr>
+                    <td>{{ visit.timestamp }}</td>
+                    <td class="monospace">{{ visit.user_id }}</td>
+                    <td>
+                        {% if visit.country != 'Unknown' %}
+                            {{ visit.city }}, {{ visit.country }}
+                        {% else %}
+                            Unknown
+                        {% endif %}
+                    </td>
+                    <td class="monospace">{{ visit.ip_address }}</td>
+                    <td>{{ visit.visit_count }}</td>
+                    <td>{{ visit.first_seen }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+
+        <div class="ip-note">
+            <h3>Access Instructions:</h3>
+            <p>From other devices on your network, use:</p>
+            <p class="monospace">http://{{ local_ip }}:5000/track?your_params=here</p>
+        </div>
+    </div>
+</body>
+</html>
