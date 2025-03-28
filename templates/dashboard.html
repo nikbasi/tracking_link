@@ -2,90 +2,125 @@
 <html>
 <head>
     <title>Tracking Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-        .card { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background-color: #f8f9fa; }
-        .monospace { font-family: monospace; }
-        .ip-note { color: #666; margin-top: 20px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 2rem; background: #f8f9fa; }
+        .dashboard { max-width: 1400px; margin: 0 auto; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+        .card { background: white; padding: 1.5rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        h1 { margin-bottom: 2rem; color: #2c3e50; }
+        h2 { margin: 0 0 1rem; font-size: 1.25rem; color: #34495e; }
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #f8f9fb; }
+        .map { height: 400px; border-radius: 8px; overflow: hidden; margin: 1rem 0; }
+        .chart-container { height: 300px; position: relative; }
+        .no-data { color: #95a5a6; text-align: center; padding: 2rem; }
+        .ip-chip { background: #ecf0f1; padding: 4px 12px; border-radius: 20px; font-size: 0.9em; display: inline-block; }
+        .stat-number { font-size: 2rem; font-weight: bold; color: #3498db; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Tracking Dashboard</h1>
+    <div class="dashboard">
+        <h1>Visitor Analytics Dashboard</h1>
 
-        <div class="stats-grid">
+        <div class="grid">
             <div class="card">
-                <h3>Total Visits</h3>
-                <p class="big-number">{{ total_visits }}</p>
+                <h2>📈 Activity Overview</h2>
+                <p>Total Visits: <span class="stat-number">{{ total_visits }}</span></p>
+                <p>Unique Users: <span class="stat-number">{{ unique_users }}</span></p>
+                <p>Top Country: {{ top_location[0] }} <br>({{ top_location[1] }} visits)</p>
             </div>
+
             <div class="card">
-                <h3>Unique Users</h3>
-                <p class="big-number">{{ unique_users }}</p>
-            </div>
-            <div class="card">
-                <h3>Local IP</h3>
-                <p class="monospace">{{ local_ip }}</p>
+                <h2>🌍 Visitor Locations</h2>
+                <div id="map" class="map"></div>
+                {% if not map_data %}
+                <p class="no-data">No location data available yet. Visit the tracking link from different networks.</p>
+                {% endif %}
             </div>
         </div>
 
         <div class="card">
-            <h2>Top Locations</h2>
-            <table>
-                <tr>
-                    <th>Country</th>
-                    <th>City</th>
-                    <th>Visits</th>
-                </tr>
-                {% for loc in top_locations %}
-                <tr>
-                    <td>{{ loc.country }}</td>
-                    <td>{{ loc.city }}</td>
-                    <td>{{ loc.count }}</td>
-                </tr>
-                {% endfor %}
-            </table>
+            <h2>🕒 Visits Timeline (24h)</h2>
+            <div class="chart-container">
+                <canvas id="timelineChart"></canvas>
+                {% if timeline_data|sum == 0 %}
+                <p class="no-data">No visits recorded in the last 24 hours</p>
+                {% endif %}
+            </div>
         </div>
 
         <div class="card">
-            <h2>Recent Visits (Last 20)</h2>
+            <h2>🔍 Recent Activity</h2>
             <table>
-                <tr>
-                    <th>Time</th>
-                    <th>User ID</th>
-                    <th>Location</th>
-                    <th>IP Address</th>
-                    <th>Visits</th>
-                    <th>First Seen</th>
-                </tr>
-                {% for visit in recent_visits %}
-                <tr>
-                    <td>{{ visit.timestamp }}</td>
-                    <td class="monospace">{{ visit.user_id }}</td>
-                    <td>
-                        {% if visit.country != 'Unknown' %}
-                            {{ visit.city }}, {{ visit.country }}
-                        {% else %}
-                            Unknown
-                        {% endif %}
-                    </td>
-                    <td class="monospace">{{ visit.ip_address }}</td>
-                    <td>{{ visit.visit_count }}</td>
-                    <td>{{ visit.first_seen }}</td>
-                </tr>
-                {% endfor %}
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Location</th>
+                        <th>IP Address</th>
+                        <th>Device</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for visit in recent_visits %}
+                    <tr>
+                        <td>{{ visit.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td>
+                            {% if visit.city != 'Unknown' %}
+                                📍 {{ visit.city }}, {{ visit.country }}
+                            {% else %}
+                                🌐 {{ visit.country }}
+                            {% endif %}
+                        </td>
+                        <td>{{ visit.ip_address }}</td>
+                        <td><div class="ip-chip">{{ visit.user_agent.split('(')[0] }}</div></td>
+                        <td><a href="/user/{{ visit.user_id }}" class="action-link">View History</a></td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="4" class="no-data">No recent visits</td></tr>
+                    {% endfor %}
+                </tbody>
             </table>
-        </div>
-
-        <div class="ip-note">
-            <h3>Access Instructions:</h3>
-            <p>From other devices on your network, use:</p>
-            <p class="monospace">http://{{ local_ip }}:5000/track?your_params=here</p>
         </div>
     </div>
+
+    <script>
+        // Initialize Map
+        const map = L.map('map').setView([20, 0], 2);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+        {% for visit in map_data if visit.lat and visit.lon %}
+        L.marker([{{ visit.lat }}, {{ visit.lon }}])
+            .bindPopup(`<b>{{ visit.city }}</b><br>{{ visit.country }}<br>IP: {{ visit.ip_address }}`)
+            .addTo(map);
+        {% endfor %}
+
+        // Initialize Timeline Chart
+        const ctx = document.getElementById('timelineChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: {{ timeline_labels|tojson }},
+                datasets: [{
+                    label: 'Visits per Hour',
+                    data: {{ timeline_data|tojson }},
+                    borderColor: '#3498db',
+                    tension: 0.2,
+                    fill: false
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { display: true, title: { display: true, text: 'Time' } },
+                    y: { display: true, title: { display: true, text: 'Visits' }, beginAtZero: true }
+                }
+            }
+        });
+    </script>
 </body>
 </html>

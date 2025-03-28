@@ -1,195 +1,234 @@
-import contextlib
-import json
 import os
-import socket
-import sqlite3
 import uuid
-from datetime import datetime
-
-import geoip2.database
-from flask import Flask, request, redirect, render_template
+import json
+import socket
+import ipaddress
+import requests
+from datetime import datetime, timedelta
+from functools import wraps
+from flask import Flask, request, redirect, render_template, Response
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, func, desc
+from sqlalchemy.orm import relationship, sessionmaker, scoped_session, declarative_base
+import geoip2.database
+from dotenv import load_dotenv
 
-# Configuration
+load_dotenv()
+
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
 
-# Rate limiting configuration
-app.config['RATELIMIT_STORAGE_URI'] = 'memory://'
+
+def authenticate():
+    return Response(
+        'Login Required', 401,
+        {'WWW-Authenticate': 'Basic realm="Tracking Dashboard"'}
+    )
+
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_password_hash(DASH_PASS_HASH, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+
+    return decorated
+
+
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
-    default_limits=["500 per day", "100 per hour"]
+    default_limits=["500/day", "100/hour"]
 )
 
-# Database setup
-DATABASE = 'tracker.db'
+engine = create_engine('sqlite:///tracker.db')
+Base = declarative_base()
+Session = scoped_session(sessionmaker(bind=engine))
 
 
-def init_db():
-    with contextlib.closing(sqlite3.connect(DATABASE)) as conn:
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                visit_count INTEGER DEFAULT 0,
-                first_seen DATETIME,
-                last_seen DATETIME
-            )
-        ''')
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS visits (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT,
-                timestamp DATETIME,
-                ip_address TEXT,
-                city TEXT,
-                country TEXT,
-                user_agent TEXT,
-                referrer TEXT,
-                url_params TEXT,
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            )
-        ''')
-        conn.commit()
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(String(36), primary_key=True)
+    visit_count = Column(Integer, default=0)
+    first_seen = Column(DateTime)
+    last_seen = Column(DateTime)
+    visits = relationship('Visit', back_populates='user')
 
 
-init_db()
+class Visit(Base):
+    __tablename__ = 'visits'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(36), ForeignKey('users.id'))
+    timestamp = Column(DateTime)
+    ip_address = Column(String(45))
+    city = Column(String(50))
+    country = Column(String(50))
+    lat = Column(String(15))
+    lon = Column(String(15))
+    user_agent = Column(String(200))
+    referrer = Column(String(200))
+    url_params = Column(String(500))
+    user = relationship('User', back_populates='visits')
 
-# GeoIP setup
-geo_reader = geoip2.database.Reader('GeoLite2-City.mmdb')
 
-# Dashboard credentials
+Base.metadata.create_all(engine)
+
+geo_reader = geoip2.database.Reader(os.getenv('GEOIP_PATH', 'GeoLite2-City.mmdb'))
 DASH_PASS_HASH = generate_password_hash(os.getenv('DASH_PASS', 'default-password'))
+
+
+def is_private_ip(ip):
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except:
+        return True
+
+
+def get_real_ip():
+    xff = [ip.strip() for ip in request.headers.get('X-Forwarded-For', '').split(',')]
+    for ip in xff:
+        if ip and not is_private_ip(ip): return ip
+    if not is_private_ip(ip := request.remote_addr): return ip
+    try:
+        return requests.get('https://api.ipify.org', timeout=2).text
+    except:
+        return ip
 
 
 def get_geo_info(ip):
     try:
-        if ip in ['127.0.0.1', '::1']:
-            return ('Localhost', 'Local Network')
-
-        response = geo_reader.city(ip)
-        city = response.city.name or 'Unknown City'
-        country = response.country.name or 'Unknown Country'
-        return (city, country)
+        if is_private_ip(ip):
+            ext_ip = requests.get('https://api.ipify.org', timeout=2).text
+            resp = geo_reader.city(ext_ip)
+        else:
+            resp = geo_reader.city(ip)
+        return {
+            'city': resp.city.name or 'Unknown',
+            'country': resp.country.name or 'Unknown',
+            'lat': resp.location.latitude,
+            'lon': resp.location.longitude
+        }
     except Exception as e:
         print(f"GeoIP Error: {str(e)}")
-        return ('Unknown', 'Unknown')
+        return {'city': 'Unknown', 'country': 'Unknown', 'lat': None, 'lon': None}
 
 
 def get_or_create_user():
-    user_id = request.cookies.get('user_id')
-    if not user_id:
-        user_id = str(uuid.uuid4())
-        with sqlite3.connect(DATABASE) as conn:
-            conn.execute('''
-                INSERT INTO users (id, first_seen, last_seen)
-                VALUES (?, ?, ?)
-            ''', (user_id, datetime.now(), datetime.now()))
-            conn.commit()
-    return user_id
-
-
-def get_local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    session = Session()
     try:
-        s.connect(('10.255.255.255', 1))
-        local_ip = s.getsockname()[0]
-    except Exception:
-        local_ip = '127.0.0.1'
+        if not (user_id := request.cookies.get('user_id')):
+            user_id = str(uuid.uuid4())
+            session.add(User(id=user_id, first_seen=datetime.now(), last_seen=datetime.now()))
+            session.commit()
+        elif not session.query(User).get(user_id):
+            session.add(User(id=user_id, first_seen=datetime.now(), last_seen=datetime.now()))
+            session.commit()
+        return user_id
     finally:
-        s.close()
-    return local_ip
+        Session.remove()
 
 
 @app.route('/track')
 @limiter.limit("20/minute")
 def track():
-    user_id = get_or_create_user()
-    ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
-    city, country = get_geo_info(ip)
+    session = Session()
+    try:
+        user_id = get_or_create_user()
+        real_ip = get_real_ip()
+        geo = get_geo_info(real_ip)
 
-    with sqlite3.connect(DATABASE) as conn:
-        # Record visit
-        conn.execute('''
-            INSERT INTO visits 
-            (user_id, timestamp, ip_address, city, country, user_agent, referrer, url_params)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            user_id,
-            datetime.now().isoformat(),
-            ip,
-            city,
-            country,
-            str(request.user_agent),
-            request.referrer,
-            json.dumps(dict(request.args))
+        user = session.query(User).get(user_id) or User(id=user_id)
+        user.visit_count += 1
+        user.last_seen = datetime.now()
+
+        session.add(Visit(
+            user_id=user_id,
+            timestamp=datetime.now(),
+            ip_address=real_ip,
+            city=geo['city'],
+            country=geo['country'],
+            lat=str(geo['lat']) if geo['lat'] else None,
+            lon=str(geo['lon']) if geo['lon'] else None,
+            user_agent=request.user_agent.string,
+            referrer=request.referrer,
+            url_params=json.dumps(dict(request.args))
         ))
-
-        # Update user stats
-        conn.execute('''
-            UPDATE users 
-            SET visit_count = visit_count + 1,
-                last_seen = ?
-            WHERE id = ?
-        ''', (datetime.now(), user_id))
-
-        conn.commit()
+        session.commit()
 
         resp = redirect("https://www.google.com")
-        resp.set_cookie('user_id', user_id, max_age=60 * 60 * 24 * 365)
-    return resp
+        resp.set_cookie('user_id', user_id, max_age=31536000)
+        return resp
+    finally:
+        Session.remove()
 
 
 @app.route('/dashboard')
+@requires_auth
 def dashboard():
-    auth = request.authorization
-    if not auth or not check_password_hash(DASH_PASS_HASH, auth.password):
-        return ('Login required', 401,
-                {'WWW-Authenticate': 'Basic realm="Login Required"'})
+    session = Session()
+    try:
+        # Timeline data
+        now = datetime.now()
+        cutoff = now - timedelta(hours=24)
+        timeline = session.query(
+            func.strftime('%Y-%m-%d %H:00', Visit.timestamp).label('hour'),
+            func.count().label('count')
+        ).filter(Visit.timestamp >= cutoff).group_by('hour').all()
 
-    with sqlite3.connect(DATABASE) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        # Generate hour labels
+        hours = [(now - timedelta(hours=h)).strftime('%Y-%m-%d %H:00') for h in range(24)]
+        hours.reverse()  # Convert to list first
 
-        # General stats
-        total_visits = cursor.execute('SELECT COUNT(*) FROM visits').fetchone()[0]
-        unique_users = cursor.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+        # Create timeline data
+        timeline_dict = {h[0]: h[1] for h in timeline}
+        timeline_data = [timeline_dict.get(h, 0) for h in hours]
 
-        # Recent visits with user info
-        recent_visits = cursor.execute('''
-            SELECT visits.*, users.visit_count, users.first_seen 
-            FROM visits 
-            JOIN users ON visits.user_id = users.id
-            ORDER BY visits.timestamp DESC 
-            LIMIT 20
-        ''').fetchall()
+        # Get map data
+        map_data = session.query(Visit).filter(
+            Visit.lat.isnot(None),
+            Visit.lon.isnot(None)
+        ).limit(100).all()
 
-        # Top locations
-        top_locations = cursor.execute('''
-            SELECT country, city, COUNT(*) as count 
-            FROM visits 
-            GROUP BY country, city 
-            ORDER BY count DESC 
-            LIMIT 10
-        ''').fetchall()
+        # Get top location
+        top_location = session.query(
+            Visit.country,
+            func.count().label('count')
+        ).filter(Visit.country != 'Unknown'
+                 ).group_by(Visit.country).order_by(desc('count')).first() or ('Unknown', 0)
 
-    local_ip = get_local_ip()
+        return render_template('dashboard.html',
+                               total_visits=session.query(Visit).count(),
+                               unique_users=session.query(User).count(),
+                               recent_visits=session.query(Visit).order_by(desc(Visit.timestamp)).limit(20).all(),
+                               map_data=map_data,
+                               timeline_labels=hours,
+                               timeline_data=timeline_data,
+                               top_location=top_location,
+                               local_ip=socket.gethostbyname(socket.gethostname()))
+    finally:
+        Session.remove()
 
-    return render_template('dashboard.html',
-                           total_visits=total_visits,
-                           unique_users=unique_users,
-                           recent_visits=recent_visits,
-                           top_locations=top_locations,
-                           local_ip=local_ip)
+@app.route('/user/<user_id>')
+def user_history(user_id):
+    session = Session()
+    try:
+        user = session.query(User).get(user_id)
+        if not user: return "User not found", 404
+        visits = session.query(Visit).filter_by(user_id=user_id).order_by(desc(Visit.timestamp)).all()
+        return render_template('user_history.html', user=user, visits=visits)
+    finally: Session.remove()
+
+@app.teardown_appcontext
+def shutdown_session(exception=None): Session.remove()
 
 
 if __name__ == '__main__':
-    host = '0.0.0.0'  # Accessible from other devices
-    port = 5000
-    print(f"\nAccess tracking links from other devices using:")
-    print(f"http://{get_local_ip()}:{port}/track?your_params=here")
-    print(f"Dashboard: http://{get_local_ip()}:{port}/dashboard\n")
-    app.run(host=host, port=port, debug=True)
-    # http://localhost:5000/track?campaign=test123
+    print(f"\nTRACKING URL: http://{socket.gethostbyname(socket.gethostname())}:5000/track")
+    print(f"DASHBOARD URL: http://{socket.gethostbyname(socket.gethostname())}:5000/dashboard\n")
+    app.run(host='0.0.0.0', port=5000, debug=os.getenv('DEBUG', False))
