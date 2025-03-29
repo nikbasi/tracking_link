@@ -3,39 +3,48 @@
 {% block title %}User History - {{ user.id }}{% endblock %}
 
 {% block content %}
-<div class="user-history">
+<div class="card">
     <h2>User: {{ user.id }}</h2>
-    <div class="user-stats">
-        <p>First Seen: {{ user.first_seen.strftime('%Y-%m-%d %H:%M') }}</p>
-        <p>Last Seen: {{ user.last_seen.strftime('%Y-%m-%d %H:%M') }}</p>
-        <p>Total Visits: {{ user.visit_count }}</p>
+    <div class="grid">
+        <div class="card">
+            <h3>📊 User Stats</h3>
+            <p>First Seen: {{ user.first_seen.strftime('%Y-%m-%d %H:%M') }}</p>
+            <p>Last Seen: {{ user.last_seen.strftime('%Y-%m-%d %H:%M') }}</p>
+            <p>Total Visits: <span class="stat-number">{{ user.visit_count }}</span></p>
+        </div>
     </div>
 
-    <table>
-        <thead>
-            <tr>
-                <th>Timestamp</th>
-                <th>IP Address</th>
-                <th>Location</th>
-                <th>User Agent</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for visit in visits %}
-            <tr>
-                <td>{{ visit.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
-                <td>{{ visit.ip_address }}</td>
-                <td>
-                    {% if visit.city != 'Unknown' %}
-                        {{ visit.city }}, {{ visit.country }}
-                    {% else %}
-                        {{ visit.country }}
-                    {% endif %}
-                </td>
-                <td>{{ visit.user_agent.split('(')[0] }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>IP Address</th>
+                    <th>Location</th>
+                    <th>Link</th>
+                    <th>User Agent</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for visit in visits %}
+                <tr>
+                    <td>{{ visit.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>{{ visit.ip_address }}</td>
+                    <td>
+                        {% if visit.city != 'Unknown' %}
+                            {{ visit.city }}, {{ visit.country }}
+                        {% else %}
+                            {{ visit.country }}
+                        {% endif %}
+                    </td>
+                    <td>{{ visit.link.name if visit.link else 'N/A' }}</td>
+                    <td><div class="ip-chip">{{ visit.user_agent.split('(')[0] }}</div></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="no-data">No visits recorded</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
 {% endblock %}

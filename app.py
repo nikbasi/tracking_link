@@ -6,7 +6,7 @@ import ipaddress
 import requests
 from datetime import datetime, timedelta
 from functools import wraps
-from flask import Flask, request, redirect, render_template, Response, url_for
+from flask import Flask, request, redirect, render_template, Response, flash, url_for
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -51,12 +51,14 @@ engine = create_engine('sqlite:///tracker.db')
 Base = declarative_base()
 Session = scoped_session(sessionmaker(bind=engine))
 
+
 class Link(Base):
     __tablename__ = 'links'
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(100))
     created_at = Column(DateTime, default=datetime.now)
     visits = relationship('Visit', back_populates='link')
+
 
 class User(Base):
     __tablename__ = 'users'
@@ -65,6 +67,7 @@ class User(Base):
     first_seen = Column(DateTime)
     last_seen = Column(DateTime)
     visits = relationship('Visit', back_populates='user')
+
 
 class Visit(Base):
     __tablename__ = 'visits'
@@ -83,10 +86,12 @@ class Visit(Base):
     user = relationship('User', back_populates='visits')
     link = relationship('Link', back_populates='visits')
 
+
 Base.metadata.create_all(engine)
 
 geo_reader = geoip2.database.Reader(os.getenv('GEOIP_PATH', 'GeoLite2-City.mmdb'))
 DASH_PASS_HASH = generate_password_hash(os.getenv('DASH_PASS', 'default-password'))
+
 
 @app.route('/track/<link_id>')
 @limiter.limit("20/minute")
@@ -125,6 +130,7 @@ def track(link_id):
         return resp
     finally:
         Session.remove()
+
 
 def is_private_ip(ip):
     try:
@@ -176,6 +182,7 @@ def get_or_create_user():
     finally:
         Session.remove()
 
+
 @app.route('/link/<link_id>', methods=['DELETE'])
 @requires_auth
 def delete_link(link_id):
@@ -190,23 +197,26 @@ def delete_link(link_id):
     finally:
         Session.remove()
 
+
 @app.route('/dashboard', methods=['GET', 'POST'])
 @requires_auth
 def dashboard():
     session = Session()
     try:
-        error = None
         if request.method == 'POST':
             name = request.form.get('name').strip()
             if not name:
-                error = "Link name is required"
+                flash('Link name is required', 'error')
             elif session.query(Link).filter(func.lower(Link.name) == func.lower(name)).first():
-                error = "Link name already exists"
+                flash('Link name already exists', 'error')
             else:
                 new_link = Link(name=name)
                 session.add(new_link)
                 session.commit()
+                flash('Link created successfully', 'success')
+            return redirect(url_for('dashboard'))
 
+        # Rest of the dashboard logic
         links = session.query(Link).options(joinedload(Link.visits)).all()
         links_with_stats = []
         for link in links:
@@ -225,21 +235,18 @@ def dashboard():
             func.count().label('count')
         ).filter(Visit.timestamp >= cutoff).group_by('hour').all()
 
-        # Generate hour labels
         hours = [(now - timedelta(hours=h)).strftime('%Y-%m-%d %H:00') for h in range(24)]
-        hours.reverse()  # Convert to list first
-
-        # Create timeline data
+        hours.reverse()
         timeline_dict = {h[0]: h[1] for h in timeline}
         timeline_data = [timeline_dict.get(h, 0) for h in hours]
 
-        # Get map data
+        # Map data
         map_data = session.query(Visit).filter(
             Visit.lat.isnot(None),
             Visit.lon.isnot(None)
         ).limit(100).all()
 
-        # Get top location
+        # Top location
         top_location = session.query(
             Visit.country,
             func.count().label('count')
@@ -247,7 +254,6 @@ def dashboard():
                  ).group_by(Visit.country).order_by(desc('count')).first() or ('Unknown', 0)
 
         return render_template('dashboard.html',
-                               error=error,
                                total_visits=session.query(Visit).count(),
                                unique_users=session.query(User).count(),
                                recent_visits=session.query(Visit).options(joinedload(Visit.link))
@@ -257,25 +263,28 @@ def dashboard():
                                timeline_data=timeline_data,
                                top_location=top_location,
                                local_ip=socket.gethostbyname(socket.gethostname()),
-                               links=links_with_stats)
+                               links=links_with_stats)  # Removed error=error parameter
     finally:
         Session.remove()
+
+
 @app.route('/user/<user_id>')
 def user_history(user_id):
     session = Session()
     try:
         user = session.query(User).get(user_id)
         if not user: return "User not found", 404
-        visits = session.query(Visit).options(joinedload(Visit.link)).filter_by(user_id=user_id).order_by(desc(Visit.timestamp)).all()
+        visits = session.query(Visit).options(joinedload(Visit.link)).filter_by(user_id=user_id).order_by(
+            desc(Visit.timestamp)).all()
         return render_template('user_history.html', user=user, visits=visits)
     finally:
         Session.remove()
+
 
 @app.teardown_appcontext
 def shutdown_session(exception=None): Session.remove()
 
 
 if __name__ == '__main__':
-    print(f"\nTRACKING URL: http://{socket.gethostbyname(socket.gethostname())}:5000/track")
     print(f"DASHBOARD URL: http://{socket.gethostbyname(socket.gethostname())}:5000/dashboard\n")
     app.run(host='0.0.0.0', port=5000, debug=os.getenv('DEBUG', False))

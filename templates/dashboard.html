@@ -1,114 +1,94 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Tracking Dashboard</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
-    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 2rem; background: #f8f9fa; }
-        .dashboard { max-width: 1400px; margin: 0 auto; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
-        .card { background: white; padding: 1.5rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-        h1 { margin-bottom: 2rem; color: #2c3e50; }
-        h2 { margin: 0 0 1rem; font-size: 1.25rem; color: #34495e; }
-        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
-        th { background: #f8f9fb; }
-        .map { height: 400px; border-radius: 8px; overflow: hidden; margin: 1rem 0; }
-        .chart-container { height: 300px; position: relative; }
-        .no-data { color: #95a5a6; text-align: center; padding: 2rem; }
-        .ip-chip { background: #ecf0f1; padding: 4px 12px; border-radius: 20px; font-size: 0.9em; display: inline-block; }
-        .stat-number { font-size: 2rem; font-weight: bold; color: #3498db; }
-    </style>
-</head>
-<body>
-<div class="dashboard">
-    <h1>Visitor Analytics Dashboard</h1>
+{% extends "base.html" %}
 
-    <div class="grid">
-        <div class="card">
-            <h2>📈 Activity Overview</h2>
-            <p>Total Visits: <span class="stat-number">{{ total_visits }}</span></p>
-            <p>Unique Users: <span class="stat-number">{{ unique_users }}</span></p>
-            <p>Top Country: {{ top_location[0] }} <br>({{ top_location[1] }} visits)</p>
-        </div>
+{% block content %}
+<h1>Visitor Analytics Dashboard</h1>
 
-        <div class="card">
-            <h2>🔗 Tracking Links</h2>
-            <form method="POST" action="/dashboard" class="link-form">
-                <input type="text" name="name" placeholder="Link name" required>
-                <button type="submit">Create New</button>
-                {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
-            </form>
+<div class="grid">
+    <!-- Activity Overview Card (unchanged) -->
+    <div class="card">
+        <h2>📈 Activity Overview</h2>
+        <p>Total Visits: <span class="stat-number">{{ total_visits }}</span></p>
+        <p>Unique Users: <span class="stat-number">{{ unique_users }}</span></p>
+        <p>Top Country: {{ top_location[0] }} <br>({{ top_location[1] }} visits)</p>
+    </div>
 
-            <div class="table-container">
-                <table>
-                    <thead>
-                    <tr>
-                        <th style="width: 20%">Name</th>
-                        <th style="width: 35%">Tracking URL</th>
-                        <th style="width: 15%">Created</th>
-                        <th style="width: 10%">Visits</th>
-                        <th style="width: 15%">Last Activity</th>
-                        <th style="width: 5%"></th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    {% for link in links %}
-                    <tr>
-                        <td>{{ link.link.name }}</td>
-                        <td class="tracking-url">
-                            <span>http://{{ local_ip }}:5000/track/{{ link.link.id }}</span>
-                            <button class="copy-btn" onclick="copyUrl(this)">📋</button>
-                        </td>
-                        <td>{{ link.link.created_at.strftime('%Y-%m-%d') }}</td>
-                        <td>{{ link.visit_count }}</td>
-                        <td>
-                            {% if link.last_activity %}
-                            {{ link.last_activity.strftime('%Y-%m-%d %H:%M') }}
-                            {% else %}
-                            Never
-                            {% endif %}
-                        </td>
-                        <td>
-                            <button class="delete-btn"
-                                    data-link-id="{{ link.link.id }}"
-                                    onclick="deleteLink(this)">🗑️
-                            </button>
-                        </td>
-                    </tr>
+    <!-- Map Card -->
+    <div class="card">
+        <h2>🌍 Visitor Locations</h2>
+        <div id="map" class="map"></div>
+        {% if not map_data %}
+        <p class="no-data">No location data available yet. Visit the tracking link from different networks.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Tracking Links Section -->
+<div class="card">
+    <h2>🔗 Tracking Links</h2>
+    <form method="POST" action="/dashboard" class="link-form">
+        <input type="text" name="name" placeholder="Link name" required>
+        <button type="submit">Create New</button>
+    </form>
+
+    <div class="table-container">
+        <table>
+            <thead>
+            <tr>
+                <th style="width: 20%">Name</th>
+                <th style="width: 35%">Tracking URL</th>
+                <th style="width: 15%">Created</th>
+                <th style="width: 10%">Visits</th>
+                <th style="width: 15%">Last Activity</th>
+                <th style="width: 5%"></th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for link in links %}
+            <tr>
+                <td>{{ link.link.name }}</td>
+                <td class="tracking-url">
+                    <span>http://{{ local_ip }}:5000/track/{{ link.link.id }}</span>
+                    <button class="copy-btn" onclick="copyUrl(this)">📋</button>
+                </td>
+                <td>{{ link.link.created_at.strftime('%Y-%m-%d') }}</td>
+                <td>{{ link.visit_count }}</td>
+                <td>
+                    {% if link.last_activity %}
+                    {{ link.last_activity.strftime('%Y-%m-%d %H:%M') }}
                     {% else %}
-                    <tr>
-                        <td colspan="6" class="no-data">No tracking links created yet</td>
-                    </tr>
-                    {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="card">
-            <h2>🌍 Visitor Locations</h2>
-            <div id="map" class="map"></div>
-            {% if not map_data %}
-            <p class="no-data">No location data available yet. Visit the tracking link from different networks.</p>
-            {% endif %}
-        </div>
+                    Never
+                    {% endif %}
+                </td>
+                <td>
+                    <button class="delete-btn"
+                            data-link-id="{{ link.link.id }}"
+                            onclick="deleteLink(this)">🗑️
+                    </button>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="6" class="no-data">No tracking links created yet</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
     </div>
+</div>
 
-    <div class="card">
-        <h2>🕒 Visits Timeline (24h)</h2>
-        <div class="chart-container">
-            <canvas id="timelineChart"></canvas>
-            {% if timeline_data|sum == 0 %}
-            <p class="no-data">No visits recorded in the last 24 hours</p>
-            {% endif %}
-        </div>
+<div class="card">
+    <h2>🕒 Visits Timeline (24h)</h2>
+    <div class="chart-container">
+        <canvas id="timelineChart"></canvas>
+        {% if timeline_data|sum == 0 %}
+        <p class="no-data">No visits recorded in the last 24 hours</p>
+        {% endif %}
     </div>
+</div>
 
-    <div class="card">
-        <h2>🔍 Recent Activity</h2>
+<div class="card">
+    <h2>🔍 Recent Activity</h2>
+    <div class="table-container">
         <table>
             <thead>
             <tr>
@@ -117,6 +97,7 @@
                 <th>IP Address</th>
                 <th>Device</th>
                 <th>Link</th>
+                <th>Actions</th>
             </tr>
             </thead>
             <tbody>
@@ -134,12 +115,12 @@
                 <td>
                     <div class="ip-chip">{{ visit.user_agent.split('(')[0] }}</div>
                 </td>
-                <td><a href="/user/{{ visit.user_id }}" class="action-link">View History</a></td>
                 <td>{{ visit.link.name if visit.link else 'N/A' }}</td>
+                <td><a href="/user/{{ visit.user_id }}" class="action-link">View History</a></td>
             </tr>
             {% else %}
             <tr>
-                <td colspan="4" class="no-data">No recent visits</td>
+                <td colspan="6" class="no-data">No recent visits</td>
             </tr>
             {% endfor %}
             </tbody>
@@ -147,70 +128,12 @@
     </div>
 </div>
 
-<style>
-    .table-container {
-        overflow-x: auto;
-        margin-top: 1rem;
-    }
-
-    .link-form {
-        display: flex;
-        gap: 8px;
-        margin-bottom: 1rem;
-    }
-
-    .tracking-url {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .copy-btn {
-        background: none;
-        border: none;
-        cursor: pointer;
-        padding: 4px;
-    }
-
-    .delete-btn {
-        background: none;
-        border: none;
-        cursor: pointer;
-        color: #e74c3c;
-    }
-
-    .form-error {
-        color: #c0392b;
-        margin: 0.5rem 0 0;
-        font-size: 0.9em;
-    }
-</style>
-
 <script>
-    function copyUrl(button) {
-        const url = button.previousElementSibling.textContent;
-        navigator.clipboard.writeText(url);
-        button.textContent = '✅';
-        setTimeout(() => button.textContent = '📋', 2000);
-    }
-
-    async function deleteLink(button) {
-        if(!confirm('Delete this tracking link? Visits will be preserved but unlinked.')) return;
-
-        const linkId = button.dataset.linkId;
-        try {
-            const response = await fetch(`/link/${linkId}`, { method: 'DELETE' });
-            if(response.ok) button.closest('tr').remove();
-        } catch(e) {
-            alert('Error deleting link');
-        }
-    }
-</script>
-
-<script>
-    // Initialize Map
+    // Initialize Map - THIS MUST COME AFTER THE MAP DIV
     const map = L.map('map').setView([20, 0], 2);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
 
     {% for visit in map_data if visit.lat and visit.lon %}
     L.marker([{{ visit.lat }}, {{ visit.lon }}])
@@ -242,5 +165,4 @@
         }
     });
 </script>
-</body>
-</html>
+{% endblock %}
