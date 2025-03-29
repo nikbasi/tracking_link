@@ -6,13 +6,13 @@ import ipaddress
 import requests
 from datetime import datetime, timedelta
 from functools import wraps
-from flask import Flask, request, redirect, render_template, Response
+from flask import Flask, request, redirect, render_template, Response, url_for
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, func, desc
-from sqlalchemy.orm import relationship, sessionmaker, scoped_session, declarative_base
+from sqlalchemy.orm import relationship, sessionmaker, scoped_session, declarative_base, joinedload
 import geoip2.database
 from dotenv import load_dotenv
 
@@ -51,6 +51,12 @@ engine = create_engine('sqlite:///tracker.db')
 Base = declarative_base()
 Session = scoped_session(sessionmaker(bind=engine))
 
+class Link(Base):
+    __tablename__ = 'links'
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(100))
+    created_at = Column(DateTime, default=datetime.now)
+    visits = relationship('Visit', back_populates='link')
 
 class User(Base):
     __tablename__ = 'users'
@@ -60,11 +66,11 @@ class User(Base):
     last_seen = Column(DateTime)
     visits = relationship('Visit', back_populates='user')
 
-
 class Visit(Base):
     __tablename__ = 'visits'
     id = Column(Integer, primary_key=True)
     user_id = Column(String(36), ForeignKey('users.id'))
+    link_id = Column(String(36), ForeignKey('links.id'))
     timestamp = Column(DateTime)
     ip_address = Column(String(45))
     city = Column(String(50))
@@ -75,13 +81,50 @@ class Visit(Base):
     referrer = Column(String(200))
     url_params = Column(String(500))
     user = relationship('User', back_populates='visits')
-
+    link = relationship('Link', back_populates='visits')
 
 Base.metadata.create_all(engine)
 
 geo_reader = geoip2.database.Reader(os.getenv('GEOIP_PATH', 'GeoLite2-City.mmdb'))
 DASH_PASS_HASH = generate_password_hash(os.getenv('DASH_PASS', 'default-password'))
 
+@app.route('/track/<link_id>')
+@limiter.limit("20/minute")
+def track(link_id):
+    session = Session()
+    try:
+        link = session.query(Link).get(link_id)
+        if not link:
+            return "Invalid tracking link", 404
+
+        user_id = get_or_create_user()
+        real_ip = get_real_ip()
+        geo = get_geo_info(real_ip)
+
+        user = session.query(User).get(user_id) or User(id=user_id)
+        user.visit_count += 1
+        user.last_seen = datetime.now()
+
+        session.add(Visit(
+            user_id=user_id,
+            link_id=link_id,
+            timestamp=datetime.now(),
+            ip_address=real_ip,
+            city=geo['city'],
+            country=geo['country'],
+            lat=str(geo['lat']) if geo['lat'] else None,
+            lon=str(geo['lon']) if geo['lon'] else None,
+            user_agent=request.user_agent.string,
+            referrer=request.referrer,
+            url_params=json.dumps(dict(request.args))
+        ))
+        session.commit()
+
+        resp = redirect("https://www.google.com")
+        resp.set_cookie('user_id', user_id, max_age=31536000)
+        return resp
+    finally:
+        Session.remove()
 
 def is_private_ip(ip):
     try:
@@ -133,46 +176,47 @@ def get_or_create_user():
     finally:
         Session.remove()
 
-
-@app.route('/track')
-@limiter.limit("20/minute")
-def track():
+@app.route('/link/<link_id>', methods=['DELETE'])
+@requires_auth
+def delete_link(link_id):
     session = Session()
     try:
-        user_id = get_or_create_user()
-        real_ip = get_real_ip()
-        geo = get_geo_info(real_ip)
+        link = session.query(Link).get(link_id)
+        if not link: return "Link not found", 404
 
-        user = session.query(User).get(user_id) or User(id=user_id)
-        user.visit_count += 1
-        user.last_seen = datetime.now()
-
-        session.add(Visit(
-            user_id=user_id,
-            timestamp=datetime.now(),
-            ip_address=real_ip,
-            city=geo['city'],
-            country=geo['country'],
-            lat=str(geo['lat']) if geo['lat'] else None,
-            lon=str(geo['lon']) if geo['lon'] else None,
-            user_agent=request.user_agent.string,
-            referrer=request.referrer,
-            url_params=json.dumps(dict(request.args))
-        ))
+        session.delete(link)
         session.commit()
-
-        resp = redirect("https://www.google.com")
-        resp.set_cookie('user_id', user_id, max_age=31536000)
-        return resp
+        return '', 204
     finally:
         Session.remove()
 
-
-@app.route('/dashboard')
+@app.route('/dashboard', methods=['GET', 'POST'])
 @requires_auth
 def dashboard():
     session = Session()
     try:
+        error = None
+        if request.method == 'POST':
+            name = request.form.get('name').strip()
+            if not name:
+                error = "Link name is required"
+            elif session.query(Link).filter(func.lower(Link.name) == func.lower(name)).first():
+                error = "Link name already exists"
+            else:
+                new_link = Link(name=name)
+                session.add(new_link)
+                session.commit()
+
+        links = session.query(Link).options(joinedload(Link.visits)).all()
+        links_with_stats = []
+        for link in links:
+            visit_count = session.query(func.count(Visit.id)).filter(Visit.link_id == link.id).scalar()
+            links_with_stats.append({
+                'link': link,
+                'visit_count': visit_count,
+                'last_activity': session.query(func.max(Visit.timestamp)).filter(Visit.link_id == link.id).scalar()
+            })
+
         # Timeline data
         now = datetime.now()
         cutoff = now - timedelta(hours=24)
@@ -203,26 +247,29 @@ def dashboard():
                  ).group_by(Visit.country).order_by(desc('count')).first() or ('Unknown', 0)
 
         return render_template('dashboard.html',
+                               error=error,
                                total_visits=session.query(Visit).count(),
                                unique_users=session.query(User).count(),
-                               recent_visits=session.query(Visit).order_by(desc(Visit.timestamp)).limit(20).all(),
+                               recent_visits=session.query(Visit).options(joinedload(Visit.link))
+                               .order_by(desc(Visit.timestamp)).limit(20).all(),
                                map_data=map_data,
                                timeline_labels=hours,
                                timeline_data=timeline_data,
                                top_location=top_location,
-                               local_ip=socket.gethostbyname(socket.gethostname()))
+                               local_ip=socket.gethostbyname(socket.gethostname()),
+                               links=links_with_stats)
     finally:
         Session.remove()
-
 @app.route('/user/<user_id>')
 def user_history(user_id):
     session = Session()
     try:
         user = session.query(User).get(user_id)
         if not user: return "User not found", 404
-        visits = session.query(Visit).filter_by(user_id=user_id).order_by(desc(Visit.timestamp)).all()
+        visits = session.query(Visit).options(joinedload(Visit.link)).filter_by(user_id=user_id).order_by(desc(Visit.timestamp)).all()
         return render_template('user_history.html', user=user, visits=visits)
-    finally: Session.remove()
+    finally:
+        Session.remove()
 
 @app.teardown_appcontext
 def shutdown_session(exception=None): Session.remove()
