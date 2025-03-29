@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}{{ link.name }} Analytics{% endblock %}
+
+{% block content %}
+<h1>🔗 {{ link.name }} Analytics</h1>
+
+<div class="grid">
+    <div class="card">
+        <h2>📈 Link Overview</h2>
+        <p>Total Clicks: <span class="stat-number">{{ total_visits }}</span></p>
+        <p>Unique Users: <span class="stat-number">{{ unique_users }}</span></p>
+        <p>Created: {{ link.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+    </div>
+
+    <div class="card">
+        <h2>🌍 Click Locations</h2>
+        <div id="map" class="map"></div>
+        {% if not map_data %}
+        <p class="no-data">No location data available for this link</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card">
+    <h2>🕒 Clicks Timeline (24h)</h2>
+    <div class="chart-container">
+        <canvas id="timelineChart"></canvas>
+        {% if timeline_data|sum == 0 %}
+        <p class="no-data">No clicks recorded in the last 24 hours</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card">
+    <h2>🔍 Recent Clicks</h2>
+    <div class="table-container">
+        <table>
+            <thead>
+            <tr>
+                <th>Time</th>
+                <th>User</th>
+                <th>Location</th>
+                <th>IP Address</th>
+                <th>Device</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for visit in recent_visits %}
+            <tr>
+                <td>{{ visit.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td><a href="/user/{{ visit.user_id }}">{{ visit.user_id[:8] }}...</a></td>
+                <td>
+                    {% if visit.city != 'Unknown' %}
+                    📍 {{ visit.city }}, {{ visit.country }}
+                    {% else %}
+                    🌐 {{ visit.country }}
+                    {% endif %}
+                </td>
+                <td>{{ visit.ip_address }}</td>
+                <td>
+                    <div class="ip-chip">{{ visit.user_agent.split('(')[0] }}</div>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" class="no-data">No recent clicks</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    // Initialize Map
+    const map = L.map('map').setView([20, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+    {% for visit in map_data if visit.lat and visit.lon %}
+    L.marker([{{ visit.lat }}, {{ visit.lon }}])
+        .bindPopup(`<b>{{ visit.city }}</b><br>{{ visit.country }}<br>IP: {{ visit.ip_address }}`)
+        .addTo(map);
+    {% endfor %}
+
+    // Timeline Chart
+    const ctx = document.getElementById('timelineChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: {{ timeline_labels|tojson }},
+            datasets: [{
+                label: 'Clicks per Hour',
+                data: {{ timeline_data|tojson }},
+                borderColor: '#3498db',
+                tension: 0.2,
+                fill: false
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: { display: true, title: { display: true, text: 'Time' } },
+                y: { display: true, title: { display: true, text: 'Clicks' }, beginAtZero: true }
+            }
+        }
+    });
+</script>
+{% endblock %}

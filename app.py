@@ -182,22 +182,6 @@ def get_or_create_user():
     finally:
         Session.remove()
 
-
-@app.route('/link/<link_id>', methods=['DELETE'])
-@requires_auth
-def delete_link(link_id):
-    session = Session()
-    try:
-        link = session.query(Link).get(link_id)
-        if not link: return "Link not found", 404
-
-        session.delete(link)
-        session.commit()
-        return '', 204
-    finally:
-        Session.remove()
-
-
 @app.route('/dashboard', methods=['GET', 'POST'])
 @requires_auth
 def dashboard():
@@ -280,6 +264,76 @@ def user_history(user_id):
     finally:
         Session.remove()
 
+@app.route('/link/<link_id>')
+@requires_auth
+def link_dashboard(link_id):
+    session = Session()
+    try:
+        link = session.query(Link).get(link_id)
+        if not link:
+            return "Link not found", 404
+
+        # Link-specific statistics
+        visits_query = session.query(Visit).filter_by(link_id=link_id)
+        total_visits = visits_query.count()
+        unique_users = session.query(func.count(Visit.user_id.distinct())) \
+            .filter(Visit.link_id == link_id) \
+            .scalar()
+        # Timeline data for this link
+        now = datetime.now()
+        cutoff = now - timedelta(hours=24)
+        timeline = session.query(
+            func.strftime('%Y-%m-%d %H:00', Visit.timestamp).label('hour'),
+            func.count().label('count')
+        ).filter(
+            Visit.timestamp >= cutoff,
+            Visit.link_id == link_id
+        ).group_by('hour').all()
+
+        hours = [(now - timedelta(hours=h)).strftime('%Y-%m-%d %H:00') for h in range(24)]
+        hours.reverse()
+        timeline_dict = {h[0]: h[1] for h in timeline}
+        timeline_data = [timeline_dict.get(h, 0) for h in hours]
+
+        # Map data for this link
+        map_data = visits_query.filter(
+            Visit.lat.isnot(None),
+            Visit.lon.isnot(None)
+        ).limit(100).all()
+
+        # Recent activity
+        recent_visits = visits_query.options(joinedload(Visit.user)) \
+                                  .order_by(desc(Visit.timestamp)).limit(20).all()
+
+        return render_template('link_dashboard.html',
+                              link=link,
+                              total_visits=total_visits,
+                              unique_users=unique_users,
+                              recent_visits=recent_visits,
+                              map_data=map_data,
+                              timeline_labels=hours,
+                              timeline_data=timeline_data)
+    finally:
+        Session.remove()
+
+
+@app.route('/link/<link_id>', methods=['DELETE'])
+@requires_auth
+def delete_link(link_id):
+    session = Session()
+    try:
+        link = session.query(Link).get(link_id)
+        if not link: return "Link not found", 404
+
+        session.delete(link)
+        session.commit()
+        response = Response('', status=204)
+        # Add CORS headers
+        response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
+    finally:
+        Session.remove()
 
 @app.teardown_appcontext
 def shutdown_session(exception=None): Session.remove()

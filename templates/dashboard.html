@@ -45,7 +45,11 @@
             <tbody>
             {% for link in links %}
             <tr>
-                <td>{{ link.link.name }}</td>
+                <td>
+                    <a href="{{ url_for('link_dashboard', link_id=link.link.id) }}">
+                        {{ link.link.name }}
+                    </a>
+                </td>
                 <td class="tracking-url">
                     <span>http://{{ local_ip }}:5000/track/{{ link.link.id }}</span>
                     <button class="copy-btn" onclick="copyUrl(this)">📋</button>
@@ -164,5 +168,41 @@
             }
         }
     });
+
+    // Copy URL Function
+    async function copyUrl(button) {
+        const url = button.previousElementSibling.textContent;
+        try {
+            await navigator.clipboard.writeText(url);
+            button.textContent = '✅';
+            setTimeout(() => button.textContent = '📋', 2000);
+        } catch (err) {
+            console.error('Copy failed:', err);
+            button.textContent = '❌';
+            setTimeout(() => button.textContent = '📋', 2000);
+        }
+    }
+
+    // Delete Link Function
+    async function deleteLink(button) {
+        if(!confirm('Delete this tracking link? Visits will be preserved but unlinked.')) return;
+
+        const linkId = button.dataset.linkId;
+        try {
+            const response = await fetch(`/link/${linkId}`, {
+                method: 'DELETE',
+                credentials: 'include'  // Add this line
+            });
+
+            if(response.ok) {
+                button.closest('tr').remove();
+            } else {
+                alert('Delete failed: ' + (await response.text()));
+            }
+        } catch(e) {
+            console.error('Delete error:', e);
+            alert('Error deleting link. Check console for details.');
+        }
+    }
 </script>
 {% endblock %}
