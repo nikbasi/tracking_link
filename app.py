@@ -182,6 +182,19 @@ def get_or_create_user():
     finally:
         Session.remove()
 
+
+def get_external_ip():
+    # If USE_EXTERNAL_IP is not set or is false, use local IP
+    if not os.getenv('USE_EXTERNAL_IP', '').lower() in ('true', '1', 'yes'):
+        return socket.gethostbyname(socket.gethostname())
+    
+    try:
+        return requests.get('https://api.ipify.org', timeout=2).text
+    except:
+        print("Warning: Failed to get external IP, falling back to local IP")
+        return socket.gethostbyname(socket.gethostname())
+
+
 @app.route('/dashboard', methods=['GET', 'POST'])
 @requires_auth
 def dashboard():
@@ -246,8 +259,8 @@ def dashboard():
                                timeline_labels=hours,
                                timeline_data=timeline_data,
                                top_location=top_location,
-                               local_ip=socket.gethostbyname(socket.gethostname()),
-                               links=links_with_stats)  # Removed error=error parameter
+                               local_ip=get_external_ip(),
+                               links=links_with_stats)
     finally:
         Session.remove()
 
@@ -340,5 +353,11 @@ def shutdown_session(exception=None): Session.remove()
 
 
 if __name__ == '__main__':
-    print(f"DASHBOARD URL: http://{socket.gethostbyname(socket.gethostname())}:5000/dashboard\n")
+    ip = get_external_ip()
+    print(f"DASHBOARD URL: http://{ip}:5000/dashboard")
+    if os.getenv('USE_EXTERNAL_IP', '').lower() in ('true', '1', 'yes'):
+        print("Note: Using external IP address for tracking URLs")
+    else:
+        print("Note: Using local IP address for tracking URLs")
+    print()
     app.run(host='0.0.0.0', port=5000, debug=os.getenv('DEBUG', False))
